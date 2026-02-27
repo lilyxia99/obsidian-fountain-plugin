@@ -1,0 +1,10 @@
+{
+    "id": "obsidian-fountain-plugin",
+    "name": "Fountain Live Preview",
+    "version": "1.0.0",
+    "minAppVersion": "0.15.0",
+    "description": "Live preview for Fountain screenwriting syntax.",
+    "author": "Antigravity",
+    "authorUrl": "",
+    "isDesktopOnly": false
+}

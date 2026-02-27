@@ -1,0 +1,12 @@
+/* Fountain base font formatting */
+/* Layout, margins, and alignments are now handled dynamically via Plugin Settings */
+.cm-line.fountain-scene-heading,
+.cm-line.fountain-character,
+.cm-line.fountain-dialogue,
+.cm-line.fountain-parenthetical,
+.cm-line.fountain-transition,
+.cm-line.fountain-centered,
+.cm-line.fountain-action {
+    font-family: "Courier Prime", "Courier New", Courier, monospace !important;
+    line-height: 1.2 !important;
+}
