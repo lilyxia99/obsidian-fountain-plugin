@@ -27,81 +27,18 @@ __export(main_exports, {
   default: () => FountainPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 
 // fountain-cm6.ts
 var import_view = require("@codemirror/view");
 var regexPatterns = {
-  // Scene Headings: INT, EXT, EST, I/E, INT/EXT, etc., or starting with a period (forced)
   sceneHeading: /^(?:INT\.|EXT\.|EST\.|INT\/EXT\.|I\/E\.|I\/X\.).*|^\.[^.].*$/i,
-  // Transitions: ends with TO:, or explicitly matching CUT TO:, FADE OUT., etc., or starting with >
   transition: /^(?:[A-Z\s]+TO:|FADE TO BLACK\.|FADE OUT\.|CUT TO BLACK\.|>.*[^<])$/i,
-  // Centered text starts with > and ends with <
   centered: /^>\s*.*\s*<$/,
-  // Character names are uppercase, can have numbers/spaces, and optionally a parenthetical (V.O.) at the end. Can't be empty.
   character: /^[\s]*[A-Z0-9\s]+(?: \([^)]+\))?\s*(?:\^)?$/,
-  // Parenthetical must be wrapped in ()
   parenthetical: /^\s*\([^)]+\)\s*$/
 };
-var DualDialogueWidget = class extends import_view.WidgetType {
-  constructor(leftLines, rightLines) {
-    super();
-    this.leftLines = leftLines;
-    this.rightLines = rightLines;
-  }
-  eq(other) {
-    if (this.leftLines.length !== other.leftLines.length || this.rightLines.length !== other.rightLines.length)
-      return false;
-    for (let i = 0; i < this.leftLines.length; i++) {
-      if (this.leftLines[i].text !== other.leftLines[i].text)
-        return false;
-    }
-    for (let i = 0; i < this.rightLines.length; i++) {
-      if (this.rightLines[i].text !== other.rightLines[i].text)
-        return false;
-    }
-    return true;
-  }
-  toDOM() {
-    const container = document.createElement("div");
-    container.className = "fountain-dual-dialogue-container";
-    container.style.display = "flex";
-    container.style.justifyContent = "space-between";
-    container.style.width = "100%";
-    container.style.marginTop = "1em";
-    container.style.marginBottom = "1em";
-    const leftCol = document.createElement("div");
-    leftCol.className = "fountain-dual-col-left";
-    leftCol.style.flex = "1";
-    leftCol.style.marginRight = "20px";
-    this.leftLines.forEach((line) => {
-      const el = document.createElement("div");
-      el.className = `fountain-${line.type} fountain-dual-left`;
-      el.innerText = line.text;
-      leftCol.appendChild(el);
-    });
-    const rightCol = document.createElement("div");
-    rightCol.className = "fountain-dual-col-right";
-    rightCol.style.flex = "1";
-    rightCol.style.marginLeft = "20px";
-    this.rightLines.forEach((line) => {
-      const el = document.createElement("div");
-      el.className = `fountain-${line.type} fountain-dual-right`;
-      if (line.type === "character") {
-        el.className += " fountain-dual-caret";
-      }
-      el.innerText = line.text;
-      rightCol.appendChild(el);
-    });
-    container.appendChild(leftCol);
-    container.appendChild(rightCol);
-    return container;
-  }
-  ignoreEvent() {
-    return false;
-  }
-};
-var buildDecorations = (view) => {
+function buildDecorations(view) {
   const builder = [];
   const doc = view.state.doc;
   let i = 1;
@@ -109,139 +46,67 @@ var buildDecorations = (view) => {
   let lastLineWasParenthetical = false;
   let lastLineWasDialogue = false;
   let lastLineWasEmpty = true;
-  const decos = [];
   while (i <= doc.lines) {
     const line = doc.line(i);
     const text = line.text;
     const trimmed = text.trim();
     let customType = "";
     if (trimmed === "") {
-      customType = "empty";
-      lastLineWasEmpty = true;
+      const isWhitespaceOnly = text.length > 0;
+      const inDialogueContext = lastLineWasCharacter || lastLineWasParenthetical || lastLineWasDialogue;
+      if (isWhitespaceOnly && inDialogueContext) {
+        builder.push(import_view.Decoration.line({ class: "fountain-dialogue" }).range(line.from));
+      } else {
+        lastLineWasEmpty = true;
+        lastLineWasCharacter = false;
+        lastLineWasParenthetical = false;
+        lastLineWasDialogue = false;
+      }
+      i++;
+      continue;
+    }
+    if (regexPatterns.sceneHeading.test(trimmed)) {
+      customType = "scene-heading";
       lastLineWasCharacter = false;
       lastLineWasParenthetical = false;
       lastLineWasDialogue = false;
+    } else if (regexPatterns.centered.test(trimmed)) {
+      customType = "centered";
+      lastLineWasCharacter = false;
+      lastLineWasParenthetical = false;
+      lastLineWasDialogue = false;
+    } else if (regexPatterns.transition.test(trimmed)) {
+      customType = "transition";
+      lastLineWasCharacter = false;
+      lastLineWasParenthetical = false;
+      lastLineWasDialogue = false;
+    } else if (lastLineWasEmpty && regexPatterns.character.test(text) && !regexPatterns.sceneHeading.test(trimmed) && !regexPatterns.transition.test(trimmed)) {
+      customType = "character";
+      lastLineWasCharacter = true;
+      lastLineWasParenthetical = false;
+      lastLineWasDialogue = false;
+    } else if ((lastLineWasCharacter || lastLineWasParenthetical || lastLineWasDialogue) && regexPatterns.parenthetical.test(trimmed)) {
+      customType = "parenthetical";
+      lastLineWasCharacter = false;
+      lastLineWasParenthetical = true;
+      lastLineWasDialogue = false;
+    } else if (lastLineWasCharacter || lastLineWasParenthetical || lastLineWasDialogue) {
+      customType = "dialogue";
+      lastLineWasCharacter = false;
+      lastLineWasParenthetical = false;
+      lastLineWasDialogue = true;
     } else {
-      if (regexPatterns.sceneHeading.test(trimmed)) {
-        customType = "scene-heading";
-        lastLineWasCharacter = false;
-        lastLineWasParenthetical = false;
-        lastLineWasDialogue = false;
-      } else if (regexPatterns.centered.test(trimmed)) {
-        customType = "centered";
-        lastLineWasCharacter = false;
-        lastLineWasParenthetical = false;
-        lastLineWasDialogue = false;
-      } else if (regexPatterns.transition.test(trimmed)) {
-        customType = "transition";
-        lastLineWasCharacter = false;
-        lastLineWasParenthetical = false;
-        lastLineWasDialogue = false;
-      } else if (lastLineWasEmpty && regexPatterns.character.test(text) && !regexPatterns.sceneHeading.test(trimmed) && !regexPatterns.transition.test(trimmed)) {
-        customType = "character";
-        lastLineWasCharacter = true;
-        lastLineWasParenthetical = false;
-        lastLineWasDialogue = false;
-      } else if ((lastLineWasCharacter || lastLineWasParenthetical || lastLineWasDialogue) && regexPatterns.parenthetical.test(trimmed)) {
-        customType = "parenthetical";
-        lastLineWasCharacter = false;
-        lastLineWasParenthetical = true;
-        lastLineWasDialogue = false;
-      } else if (lastLineWasCharacter || lastLineWasParenthetical || lastLineWasDialogue) {
-        customType = "dialogue";
-        lastLineWasCharacter = false;
-        lastLineWasParenthetical = false;
-        lastLineWasDialogue = true;
-      } else {
-        customType = "action";
-        lastLineWasCharacter = false;
-        lastLineWasParenthetical = false;
-        lastLineWasDialogue = false;
-      }
-      lastLineWasEmpty = false;
+      customType = "action";
+      lastLineWasCharacter = false;
+      lastLineWasParenthetical = false;
+      lastLineWasDialogue = false;
     }
-    decos.push({
-      lineNum: i,
-      from: line.from,
-      to: line.to,
-      type: customType,
-      text: trimmed
-    });
+    lastLineWasEmpty = false;
+    builder.push(import_view.Decoration.line({ class: `fountain-${customType}` }).range(line.from));
     i++;
   }
-  const blocksToReplace = [];
-  for (let j = 0; j < decos.length; j++) {
-    const deco = decos[j];
-    if (deco.type === "character" && deco.text.endsWith("^") && !deco.isDualProcessed) {
-      const rightGroup = [deco];
-      let k = j + 1;
-      while (k < decos.length) {
-        if (decos[k].type === "dialogue" || decos[k].type === "parenthetical") {
-          rightGroup.push(decos[k]);
-          k++;
-        } else if (decos[k].type === "empty" && k + 1 < decos.length && (decos[k + 1].type === "dialogue" || decos[k + 1].type === "parenthetical")) {
-          rightGroup.push(decos[k]);
-          k++;
-        } else {
-          break;
-        }
-      }
-      let findLeft = j - 1;
-      const emptyMiddleGroup = [];
-      while (findLeft >= 0 && decos[findLeft].type === "empty") {
-        emptyMiddleGroup.unshift(decos[findLeft]);
-        findLeft--;
-      }
-      const leftGroup = [];
-      while (findLeft >= 0) {
-        if (decos[findLeft].type === "dialogue" || decos[findLeft].type === "parenthetical") {
-          leftGroup.unshift(decos[findLeft]);
-          findLeft--;
-        } else if (decos[findLeft].type === "character") {
-          leftGroup.unshift(decos[findLeft]);
-          break;
-        } else if (decos[findLeft].type === "empty" && findLeft - 1 >= 0 && (decos[findLeft - 1].type === "dialogue" || decos[findLeft - 1].type === "parenthetical" || decos[findLeft - 1].type === "character")) {
-          leftGroup.unshift(decos[findLeft]);
-          findLeft--;
-        } else {
-          break;
-        }
-      }
-      if (leftGroup.length > 0 && leftGroup[0].type === "character") {
-        leftGroup.forEach((item) => item.isDualProcessed = true);
-        emptyMiddleGroup.forEach((item) => item.isDualProcessed = true);
-        rightGroup.forEach((item) => item.isDualProcessed = true);
-        const blockFrom = leftGroup[0].from;
-        const blockTo = rightGroup[rightGroup.length - 1].to;
-        blocksToReplace.push({
-          from: blockFrom,
-          to: blockTo,
-          leftBlock: leftGroup,
-          rightBlock: rightGroup
-        });
-      }
-    }
-  }
-  for (const b of blocksToReplace) {
-    builder.push(import_view.Decoration.replace({
-      widget: new DualDialogueWidget(
-        b.leftBlock.filter((l) => l.type !== "empty"),
-        b.rightBlock.filter((l) => l.type !== "empty")
-      ),
-      block: true
-    }).range(b.from, b.to));
-  }
-  for (const deco of decos) {
-    if (deco.isDualProcessed)
-      continue;
-    if (deco.type === "empty")
-      continue;
-    const cls = `fountain-${deco.type}`;
-    builder.push(import_view.Decoration.line({ class: cls }).range(deco.from));
-  }
-  builder.sort((a, b) => a.from - b.from);
-  return import_view.Decoration.set(builder);
-};
+  return import_view.Decoration.set(builder, true);
+}
 var fountainViewPlugin = import_view.ViewPlugin.fromClass(
   class {
     constructor(view) {
@@ -264,75 +129,67 @@ var fountainLivePreview = [
 // settings.ts
 var import_obsidian = require("obsidian");
 var defaultCss = `/* Scene Headings */
-    .markdown - source - view.mod - cm6.cm - content > .cm - line.fountain - scene - heading {
-    text - transform: uppercase!important;
-    font - weight: bold!important;
+.markdown-source-view.mod-cm6 .cm-content > .cm-line.fountain-scene-heading {
+    text-transform: uppercase !important;
+    font-weight: bold !important;
 }
 
 /* Character */
-/* ~2.2 inches from left text margin */
-.markdown - source - view.mod - cm6.cm - content > .cm - line.fountain - character {
-    text - align: left!important;
-    margin - left: 22ch!important;
-    text - transform: uppercase!important;
+.markdown-source-view.mod-cm6 .cm-content > .cm-line.fountain-character {
+    text-align: left !important;
+    margin-left: 22ch !important;
+    text-transform: uppercase !important;
 }
 
 /* Dialogue */
-/* ~1.0 inches from left text margin, ~3.5 inches wide */
-.markdown - source - view.mod - cm6.cm - content > .cm - line.fountain - dialogue {
-    margin - left: 10ch!important;
-    max - width: 40ch!important;
+.markdown-source-view.mod-cm6 .cm-content > .cm-line.fountain-dialogue {
+    margin-left: 10ch !important;
+    max-width: 40ch !important;
 }
 
 /* Parenthetical */
-/* ~1.6 inches from left text margin, ~2.0 inches wide */
-.markdown - source - view.mod - cm6.cm - content > .cm - line.fountain - parenthetical {
-    text - align: left!important;
-    margin - left: 16ch!important;
-    max - width: 25ch!important;
+.markdown-source-view.mod-cm6 .cm-content > .cm-line.fountain-parenthetical {
+    text-align: left !important;
+    margin-left: 16ch !important;
+    max-width: 25ch !important;
 }
 
 /* Transitions */
-/* Flush right or ~4.0 inches from left */
-.markdown - source - view.mod - cm6.cm - content > .cm - line.fountain - transition {
-    text - align: right!important;
-    text - transform: uppercase!important;
+.markdown-source-view.mod-cm6 .cm-content > .cm-line.fountain-transition {
+    text-align: right !important;
+    text-transform: uppercase !important;
 }
 
 /* Centered */
-.markdown - source - view.mod - cm6.cm - content > .cm - line.fountain - centered {
-    text - align: center!important;
+.markdown-source-view.mod-cm6 .cm-content > .cm-line.fountain-centered {
+    text-align: center !important;
 }
 
-/* Dual Dialogue Left */
-.markdown - source - view.mod - cm6.cm - content > .cm - line.fountain - dual - left.fountain - character {
-    margin - left: 5ch!important;
+/* Dual Dialogue Left \u2014 override normal margins, constrain to left half */
+.markdown-source-view.mod-cm6 .cm-content > .cm-line.fountain-dual-left.fountain-character {
+    margin-left: 5ch !important;
 }
-.markdown - source - view.mod - cm6.cm - content > .cm - line.fountain - dual - left.fountain - dialogue {
-    margin - left: 0ch!important;
-    max - width: 30ch!important;
+.markdown-source-view.mod-cm6 .cm-content > .cm-line.fountain-dual-left.fountain-dialogue {
+    margin-left: 0 !important;
+    max-width: none !important;
 }
-.markdown - source - view.mod - cm6.cm - content > .cm - line.fountain - dual - left.fountain - parenthetical {
-    margin - left: 2ch!important;
-}
-
-/* Dual Dialogue Right (Shifted to the right side of the screen) */
-/* In Live Preview, true flexbox side-by-side isn't possible because lines cannot be wrapped */
-.markdown - source - view.mod - cm6.cm - content > .cm - line.fountain - dual - right.fountain - character {
-    margin - left: 45ch!important;
-}
-.markdown - source - view.mod - cm6.cm - content > .cm - line.fountain - dual - right.fountain - dialogue {
-    margin - left: 40ch!important;
-    max - width: 30ch!important;
-}
-.markdown - source - view.mod - cm6.cm - content > .cm - line.fountain - dual - right.fountain - parenthetical {
-    margin - left: 42ch!important;
+.markdown-source-view.mod-cm6 .cm-content > .cm-line.fountain-dual-left.fountain-parenthetical {
+    margin-left: 2ch !important;
 }
 
-/* Hide the caret from dual dialogue character */
-.markdown - source - view.mod - cm6.cm - content > .cm - line.fountain - dual - caret {
-    /* Optional */
-} `;
+/* Dual Dialogue Right \u2014 override normal margins for right column */
+.markdown-source-view.mod-cm6 .cm-content > .cm-line.fountain-dual-right.fountain-character {
+    margin-left: 5ch !important;
+    text-align: left !important;
+}
+.markdown-source-view.mod-cm6 .cm-content > .cm-line.fountain-dual-right.fountain-dialogue {
+    margin-left: 0 !important;
+    max-width: none !important;
+}
+.markdown-source-view.mod-cm6 .cm-content > .cm-line.fountain-dual-right.fountain-parenthetical {
+    margin-left: 2ch !important;
+}
+`;
 var DEFAULT_SETTINGS = {
   customCss: defaultCss
 };
@@ -353,26 +210,410 @@ var FountainSettingTab = class extends import_obsidian.PluginSettingTab {
         this.display();
       });
     });
+    new import_obsidian.Setting(containerEl).setName("Raw CSS").setDesc("Edit this CSS to change how Fountain elements look in Live Preview. This CSS is injected exactly as written.").addTextArea(
+      (text) => text.setPlaceholder("Enter raw CSS here...").setValue(this.plugin.settings.customCss).onChange(async (value) => {
+        this.plugin.settings.customCss = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    const textAreas = containerEl.querySelectorAll("textarea");
+    textAreas.forEach((ta) => {
+      ta.style.width = "100%";
+      ta.style.height = "400px";
+      ta.style.fontFamily = "monospace";
+    });
+  }
+};
+
+// fountain-preview.ts
+var import_obsidian2 = require("obsidian");
+var FOUNTAIN_PREVIEW_VIEW = "fountain-preview-view";
+var regexPatterns2 = {
+  sceneHeading: /^(?:INT\.|EXT\.|EST\.|INT\/EXT\.|I\/E\.|I\/X\.).*|^\.[^.].*$/i,
+  transition: /^(?:[A-Z\s]+TO:|FADE TO BLACK\.|FADE OUT\.|CUT TO BLACK\.|>.*[^<])$/i,
+  centered: /^>\s*.*\s*<$/,
+  character: /^[\s]*[A-Z0-9\s]+(?: \([^)]+\))?\s*(?:\^)?$/,
+  parenthetical: /^\s*\([^)]+\)\s*$/
+};
+function parseFountain(text) {
+  const rawLines = text.split("\n");
+  const result = [];
+  let lastLineWasCharacter = false;
+  let lastLineWasParenthetical = false;
+  let lastLineWasDialogue = false;
+  let lastLineWasEmpty = true;
+  for (const rawLine of rawLines) {
+    const trimmed = rawLine.trim();
+    if (trimmed === "") {
+      const isWhitespaceOnly = rawLine.length > 0;
+      const inDialogueContext = lastLineWasCharacter || lastLineWasParenthetical || lastLineWasDialogue;
+      if (isWhitespaceOnly && inDialogueContext) {
+        result.push({ type: "dialogue-blank", text: "", rawText: rawLine });
+      } else {
+        result.push({ type: "empty", text: "", rawText: rawLine });
+        lastLineWasEmpty = true;
+        lastLineWasCharacter = false;
+        lastLineWasParenthetical = false;
+        lastLineWasDialogue = false;
+      }
+      continue;
+    }
+    let type = "action";
+    if (regexPatterns2.sceneHeading.test(trimmed)) {
+      type = "scene-heading";
+      lastLineWasCharacter = false;
+      lastLineWasParenthetical = false;
+      lastLineWasDialogue = false;
+    } else if (regexPatterns2.centered.test(trimmed)) {
+      type = "centered";
+      lastLineWasCharacter = false;
+      lastLineWasParenthetical = false;
+      lastLineWasDialogue = false;
+    } else if (regexPatterns2.transition.test(trimmed)) {
+      type = "transition";
+      lastLineWasCharacter = false;
+      lastLineWasParenthetical = false;
+      lastLineWasDialogue = false;
+    } else if (lastLineWasEmpty && regexPatterns2.character.test(rawLine) && !regexPatterns2.sceneHeading.test(trimmed) && !regexPatterns2.transition.test(trimmed)) {
+      type = "character";
+      lastLineWasCharacter = true;
+      lastLineWasParenthetical = false;
+      lastLineWasDialogue = false;
+    } else if ((lastLineWasCharacter || lastLineWasParenthetical || lastLineWasDialogue) && regexPatterns2.parenthetical.test(trimmed)) {
+      type = "parenthetical";
+      lastLineWasCharacter = false;
+      lastLineWasParenthetical = true;
+      lastLineWasDialogue = false;
+    } else if (lastLineWasCharacter || lastLineWasParenthetical || lastLineWasDialogue) {
+      type = "dialogue";
+      lastLineWasCharacter = false;
+      lastLineWasParenthetical = false;
+      lastLineWasDialogue = true;
+    } else {
+      lastLineWasCharacter = false;
+      lastLineWasParenthetical = false;
+      lastLineWasDialogue = false;
+    }
+    lastLineWasEmpty = false;
+    result.push({ type, text: trimmed, rawText: rawLine });
+  }
+  return result;
+}
+function fountainToHTML(lines) {
+  const htmlParts = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.type === "character") {
+      const leftBlock = collectDialogueBlock(lines, i);
+      const afterLeft = i + leftBlock.length;
+      let cursor = afterLeft;
+      while (cursor < lines.length && lines[cursor].type === "empty") {
+        cursor++;
+      }
+      if (cursor < lines.length && lines[cursor].type === "character" && lines[cursor].text.endsWith("^")) {
+        const rightBlock = collectDialogueBlock(lines, cursor);
+        htmlParts.push('<div class="fountain-dual-dialogue">');
+        htmlParts.push('<div class="fountain-dual-col">');
+        for (const dl of leftBlock) {
+          htmlParts.push(renderLine(dl));
+        }
+        htmlParts.push("</div>");
+        htmlParts.push('<div class="fountain-dual-col">');
+        for (const dl of rightBlock) {
+          if (dl.type === "character") {
+            htmlParts.push(renderLine({ ...dl, text: dl.text.replace(/\s*\^\s*$/, "") }));
+          } else {
+            htmlParts.push(renderLine(dl));
+          }
+        }
+        htmlParts.push("</div>");
+        htmlParts.push("</div>");
+        i = cursor + rightBlock.length;
+        continue;
+      }
+    }
+    htmlParts.push(renderLine(line));
+    i++;
+  }
+  return htmlParts.join("\n");
+}
+function collectDialogueBlock(lines, startIdx) {
+  const block = [];
+  if (startIdx >= lines.length || lines[startIdx].type !== "character")
+    return block;
+  block.push(lines[startIdx]);
+  let j = startIdx + 1;
+  while (j < lines.length && (lines[j].type === "dialogue" || lines[j].type === "parenthetical" || lines[j].type === "dialogue-blank")) {
+    block.push(lines[j]);
+    j++;
+  }
+  return block;
+}
+function renderLine(line) {
+  if (line.type === "empty" || line.type === "dialogue-blank") {
+    return '<div class="fountain-empty">&nbsp;</div>';
+  }
+  let displayText = escapeHtml(line.text);
+  if (line.type === "centered") {
+    displayText = escapeHtml(line.text.replace(/^>\s*/, "").replace(/\s*<$/, ""));
+  }
+  return `<div class="fountain-line fountain-${line.type}">${displayText}</div>`;
+}
+function escapeHtml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+var FountainPreviewView = class extends import_obsidian2.ItemView {
+  // Remember last file even when pane is focused
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.trackedFile = null;
+    this.plugin = plugin;
+  }
+  getViewType() {
+    return FOUNTAIN_PREVIEW_VIEW;
+  }
+  getDisplayText() {
+    return "Fountain Preview";
+  }
+  getIcon() {
+    return "film";
+  }
+  async onOpen() {
+    const container = this.containerEl.children[1];
+    container.empty();
+    const header = document.createElement("div");
+    header.style.cssText = "display:flex; align-items:center; justify-content:space-between; padding:4px 8px; border-bottom:1px solid var(--background-modifier-border);";
+    const title = document.createElement("span");
+    title.textContent = "\u{1F3AC} Fountain Preview";
+    title.style.cssText = "font-weight:600; font-size:0.9em; color:var(--text-muted);";
+    header.appendChild(title);
+    const refreshBtn = document.createElement("button");
+    refreshBtn.textContent = "\u21BB Refresh";
+    refreshBtn.style.cssText = "cursor:pointer; font-size:0.8em; padding:2px 8px; border-radius:4px; border:1px solid var(--background-modifier-border); background:var(--background-secondary); color:var(--text-normal);";
+    refreshBtn.addEventListener("click", () => this.forceRefresh());
+    header.appendChild(refreshBtn);
+    container.appendChild(header);
+    this.styleEl = document.createElement("style");
+    container.appendChild(this.styleEl);
+    this.contentEl_inner = document.createElement("div");
+    this.contentEl_inner.className = "fountain-preview-content";
+    container.appendChild(this.contentEl_inner);
+    this.applyCustomCss();
+    this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
+      if (!leaf)
+        return;
+      const view = leaf.view;
+      if (view instanceof import_obsidian2.MarkdownView && view.file) {
+        this.trackedFile = view.file;
+        this.renderFile();
+      }
+    }));
+    this.registerEvent(this.app.vault.on("modify", (file) => {
+      if (this.trackedFile && file.path === this.trackedFile.path) {
+        this.renderFile();
+      }
+    }));
+    this.registerEvent(this.app.workspace.on("editor-change", (editor, info) => {
+      const mdView = info;
+      if (mdView.file && this.trackedFile && mdView.file.path === this.trackedFile.path) {
+        const content = editor.getValue();
+        this.renderContent(content);
+      }
+    }));
+    this.findActiveFile();
+    this.renderFile();
+  }
+  async onClose() {
+  }
+  /**
+   * Find the currently active markdown file (if any).
+   */
+  findActiveFile() {
+    const leaves = this.app.workspace.getLeavesOfType("markdown");
+    for (const leaf of leaves) {
+      const view = leaf.view;
+      if (view instanceof import_obsidian2.MarkdownView && view.file) {
+        this.trackedFile = view.file;
+        return;
+      }
+    }
+  }
+  /**
+   * Force refresh (manual button).
+   */
+  async forceRefresh() {
+    this.findActiveFile();
+    await this.renderFile();
+  }
+  /**
+   * Read the tracked file from disk and render.
+   */
+  async renderFile() {
+    if (!this.trackedFile) {
+      this.contentEl_inner.innerHTML = '<div style="text-align:center; color:var(--text-muted); padding:2em;">Open a .fountain file, then click \u21BB Refresh.</div>';
+      return;
+    }
+    const content = await this.app.vault.read(this.trackedFile);
+    this.renderContent(content);
+  }
+  /**
+   * Render raw Fountain text into the preview pane.
+   */
+  renderContent(content) {
+    const parsedLines = parseFountain(content);
+    const html = fountainToHTML(parsedLines);
+    this.contentEl_inner.innerHTML = html;
+    this.applyCustomCss();
+  }
+  applyCustomCss() {
+    if (this.styleEl) {
+      const previewCss = `
+.fountain-preview-content {
+    font-family: "Courier Prime", "Courier New", Courier, monospace;
+    font-size: 12pt;
+    line-height: 1.5;
+    max-width: 8.5in;
+    margin: 0 auto;
+    padding: 1in 1in;
+    background: var(--background-primary);
+    color: var(--text-normal);
+}
+
+.fountain-line {
+    margin: 0;
+    padding: 0;
+}
+
+.fountain-empty {
+    min-height: 1em;
+}
+
+/* Scene Heading */
+.fountain-scene-heading {
+    text-transform: uppercase;
+    font-weight: bold;
+    margin-top: 1.5em;
+}
+
+/* Character */
+.fountain-character {
+    margin-left: 22ch;
+    text-transform: uppercase;
+    margin-top: 1em;
+}
+
+/* Dialogue */
+.fountain-dialogue {
+    margin-left: 10ch;
+    max-width: 35ch;
+}
+
+/* Parenthetical */
+.fountain-parenthetical {
+    margin-left: 16ch;
+    max-width: 25ch;
+}
+
+/* Transition */
+.fountain-transition {
+    text-align: right;
+    text-transform: uppercase;
+    margin-top: 1em;
+}
+
+/* Centered */
+.fountain-centered {
+    text-align: center;
+}
+
+/* Action */
+.fountain-action {
+    margin-top: 0.5em;
+}
+
+/* ===== Dual Dialogue ===== */
+.fountain-dual-dialogue {
+    display: flex;
+    gap: 2ch;
+    margin-top: 1em;
+    width: 100%;
+}
+
+.fountain-dual-col {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Override margins inside dual columns */
+.fountain-dual-col .fountain-character {
+    margin-left: 5ch;
+    margin-top: 0;
+}
+
+.fountain-dual-col .fountain-dialogue {
+    margin-left: 0;
+    max-width: none;
+}
+
+.fountain-dual-col .fountain-parenthetical {
+    margin-left: 2ch;
+    max-width: none;
+}
+`;
+      this.styleEl.textContent = previewCss;
+      if (this.plugin.settings.customCss) {
+        this.styleEl.textContent += "\n" + this.plugin.settings.customCss;
+      }
+    }
   }
 };
 
 // main.ts
-var FountainPlugin = class extends import_obsidian2.Plugin {
+var FountainPlugin = class extends import_obsidian3.Plugin {
   async onload() {
-    console.log("Loading Fountain Live Preview plugin");
+    console.log("[Fountain Plugin] Loading");
     await this.loadSettings();
     this.registerExtensions(["fountain"], "markdown");
     this.registerEditorExtension(fountainLivePreview);
+    this.registerView(
+      FOUNTAIN_PREVIEW_VIEW,
+      (leaf) => new FountainPreviewView(leaf, this)
+    );
+    this.addCommand({
+      id: "open-fountain-preview",
+      name: "Open Fountain Preview",
+      callback: () => this.activatePreview()
+    });
+    this.addRibbonIcon("film", "Open Fountain Preview", () => {
+      this.activatePreview();
+    });
     this.addSettingTab(new FountainSettingTab(this.app, this));
     this.styleTag = document.createElement("style");
     this.styleTag.id = "fountain-custom-css";
     document.head.appendChild(this.styleTag);
     this.applyCssSettings();
+    console.log("[Fountain Plugin] Loaded");
   }
   onunload() {
-    console.log("Unloading Fountain Live Preview plugin");
+    console.log("[Fountain Plugin] Unloading");
     if (this.styleTag) {
       this.styleTag.remove();
+    }
+  }
+  async activatePreview() {
+    const existing = this.app.workspace.getLeavesOfType(FOUNTAIN_PREVIEW_VIEW);
+    if (existing.length) {
+      this.app.workspace.revealLeaf(existing[0]);
+      return;
+    }
+    const leaf = this.app.workspace.getRightLeaf(false);
+    if (leaf) {
+      await leaf.setViewState({
+        type: FOUNTAIN_PREVIEW_VIEW,
+        active: true
+      });
+      this.app.workspace.revealLeaf(leaf);
     }
   }
   async loadSettings() {
