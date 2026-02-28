@@ -269,12 +269,27 @@ function parseFountain(text) {
       lastLineWasCharacter = false;
       lastLineWasParenthetical = false;
       lastLineWasDialogue = false;
+    } else if (/^#{1,6}\s/.test(trimmed)) {
+      const levelMatch = trimmed.match(/^(#+)/);
+      const level = Math.min(levelMatch ? levelMatch[1].length : 1, 3);
+      type = `section-heading-${level}`;
+      lastLineWasCharacter = false;
+      lastLineWasParenthetical = false;
+      lastLineWasDialogue = false;
     } else if (regexPatterns2.transition.test(trimmed)) {
       type = "transition";
       lastLineWasCharacter = false;
       lastLineWasParenthetical = false;
       lastLineWasDialogue = false;
     } else if (lastLineWasEmpty && regexPatterns2.character.test(rawLine) && !regexPatterns2.sceneHeading.test(trimmed) && !regexPatterns2.transition.test(trimmed)) {
+      type = "character";
+      lastLineWasCharacter = true;
+      lastLineWasParenthetical = false;
+      lastLineWasDialogue = false;
+    } else if (
+      // Dual-dialogue marker: CHARACTER ^ immediately after a dialogue block (no blank line required)
+      (lastLineWasCharacter || lastLineWasParenthetical || lastLineWasDialogue) && regexPatterns2.character.test(rawLine) && trimmed.endsWith("^") && !regexPatterns2.sceneHeading.test(trimmed) && !regexPatterns2.transition.test(trimmed)
+    ) {
       type = "character";
       lastLineWasCharacter = true;
       lastLineWasParenthetical = false;
@@ -357,6 +372,10 @@ function renderLine(line) {
   let displayText = escapeHtml(line.text);
   if (line.type === "centered") {
     displayText = escapeHtml(line.text.replace(/^>\s*/, "").replace(/\s*<$/, ""));
+  } else if (line.type === "transition") {
+    displayText = escapeHtml(line.text.replace(/^>\s*/, ""));
+  } else if (line.type.startsWith("section-heading")) {
+    displayText = escapeHtml(line.text.replace(/^#+\s*/, ""));
   }
   return `<div class="fountain-line fountain-${line.type}">${displayText}</div>`;
 }
@@ -388,11 +407,17 @@ var FountainPreviewView = class extends import_obsidian2.ItemView {
     title.textContent = "\u{1F3AC} Fountain Preview";
     title.style.cssText = "font-weight:600; font-size:0.9em; color:var(--text-muted);";
     header.appendChild(title);
+    const btnStyle = "cursor:pointer; font-size:0.8em; padding:2px 8px; border-radius:4px; border:1px solid var(--background-modifier-border); background:var(--background-secondary); color:var(--text-normal); margin-left:4px;";
     const refreshBtn = document.createElement("button");
     refreshBtn.textContent = "\u21BB Refresh";
-    refreshBtn.style.cssText = "cursor:pointer; font-size:0.8em; padding:2px 8px; border-radius:4px; border:1px solid var(--background-modifier-border); background:var(--background-secondary); color:var(--text-normal);";
+    refreshBtn.style.cssText = btnStyle;
     refreshBtn.addEventListener("click", () => this.forceRefresh());
     header.appendChild(refreshBtn);
+    const pdfBtn = document.createElement("button");
+    pdfBtn.textContent = "\u{1F4C4} Export PDF";
+    pdfBtn.style.cssText = btnStyle;
+    pdfBtn.addEventListener("click", () => this.exportPdf());
+    header.appendChild(pdfBtn);
     container.appendChild(header);
     this.styleEl = document.createElement("style");
     container.appendChild(this.styleEl);
@@ -466,6 +491,158 @@ var FountainPreviewView = class extends import_obsidian2.ItemView {
     this.contentEl_inner.innerHTML = html;
     this.applyCustomCss();
   }
+  exportPdf() {
+    if (!this.trackedFile) {
+      new import_obsidian2.Notice("No file loaded in preview.");
+      return;
+    }
+    const bodyHtml = this.contentEl_inner.innerHTML;
+    const printCss = this.buildPrintCss();
+    const overlay = document.createElement("div");
+    overlay.id = "fountain-print-overlay";
+    overlay.className = "fountain-preview-content";
+    overlay.innerHTML = bodyHtml;
+    document.body.appendChild(overlay);
+    const printStyle = document.createElement("style");
+    printStyle.id = "fountain-print-style";
+    printStyle.textContent = `
+@media screen {
+    #fountain-print-overlay { display: none !important; }
+}
+@media print {
+    body > *:not(#fountain-print-overlay) { display: none !important; }
+    #fountain-print-overlay { display: block !important; }
+}
+${printCss}
+`;
+    document.head.appendChild(printStyle);
+    setTimeout(() => {
+      window.print();
+      setTimeout(() => {
+        overlay.remove();
+        printStyle.remove();
+      }, 2e3);
+    }, 200);
+  }
+  buildPrintCss() {
+    const customCss = this.plugin.settings.customCss || "";
+    return `
+@page {
+    size: letter;
+    margin: 1in;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    padding: 0;
+    background: white;
+    color: black;
+}
+
+.fountain-preview-content {
+    font-family: "Courier Prime", "Courier New", Courier, monospace;
+    font-size: 12pt;
+    line-height: 1.5;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    background: white;
+    color: black;
+}
+
+.fountain-line { margin: 0; padding: 0; }
+.fountain-empty { min-height: 1em; }
+
+.fountain-scene-heading {
+    text-transform: uppercase;
+    font-weight: bold;
+    margin-top: 1.5em;
+    page-break-after: avoid;
+}
+
+.fountain-character {
+    margin-left: 22ch;
+    text-transform: uppercase;
+    margin-top: 1em;
+    page-break-after: avoid;
+}
+
+.fountain-dialogue {
+    margin-left: 10ch;
+    max-width: 35ch;
+    page-break-before: avoid;
+}
+
+.fountain-parenthetical {
+    margin-left: 16ch;
+    max-width: 25ch;
+    page-break-before: avoid;
+    page-break-after: avoid;
+}
+
+.fountain-transition {
+    text-align: right;
+    text-transform: uppercase;
+    margin-top: 1em;
+}
+
+.fountain-centered { text-align: center; }
+.fountain-action { margin-top: 0.5em; }
+
+/* Section Headings \u2014 # becomes a title page */
+.fountain-section-heading-1 {
+    page-break-before: always;
+    page-break-after: always;
+    text-align: center;
+    font-size: 1.4em;
+    font-weight: bold;
+    text-transform: uppercase;
+    padding-top: 4in;
+}
+
+.fountain-section-heading-2 {
+    font-weight: bold;
+    text-transform: uppercase;
+    margin-top: 2em;
+    page-break-after: avoid;
+}
+
+.fountain-section-heading-3 {
+    font-weight: bold;
+    margin-top: 1.5em;
+    page-break-after: avoid;
+}
+
+.fountain-dual-dialogue {
+    display: flex;
+    gap: 2ch;
+    margin-top: 1em;
+    width: 100%;
+    page-break-inside: avoid;
+}
+
+.fountain-dual-col { flex: 1; min-width: 0; }
+
+.fountain-dual-col .fountain-character {
+    margin-left: 5ch;
+    margin-top: 0;
+}
+
+.fountain-dual-col .fountain-dialogue {
+    margin-left: 0;
+    max-width: none;
+}
+
+.fountain-dual-col .fountain-parenthetical {
+    margin-left: 2ch;
+    max-width: none;
+}
+
+${customCss}
+`;
+  }
   applyCustomCss() {
     if (this.styleEl) {
       const previewCss = `
@@ -530,6 +707,32 @@ var FountainPreviewView = class extends import_obsidian2.ItemView {
 /* Action */
 .fountain-action {
     margin-top: 0.5em;
+}
+
+/* Section Headings */
+.fountain-section-heading-1 {
+    text-align: center;
+    font-size: 1.4em;
+    font-weight: bold;
+    text-transform: uppercase;
+    margin: 3em 0 2em;
+    padding: 0.5em 0;
+    border-top: 1px solid var(--background-modifier-border);
+    border-bottom: 1px solid var(--background-modifier-border);
+    color: var(--text-accent);
+}
+
+.fountain-section-heading-2 {
+    font-weight: bold;
+    text-transform: uppercase;
+    margin: 2em 0 0.5em;
+    color: var(--text-muted);
+}
+
+.fountain-section-heading-3 {
+    font-weight: bold;
+    margin: 1.5em 0 0.5em;
+    color: var(--text-muted);
 }
 
 /* ===== Dual Dialogue ===== */

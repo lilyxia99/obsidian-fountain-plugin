@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, TFile, MarkdownView } from 'obsidian';
+import { ItemView, WorkspaceLeaf, TFile, MarkdownView, Notice } from 'obsidian';
 import FountainPlugin from './main';
 
 export const FOUNTAIN_PREVIEW_VIEW = 'fountain-preview-view';
@@ -66,6 +66,13 @@ function parseFountain(text: string): FountainLine[] {
             lastLineWasCharacter = false;
             lastLineWasParenthetical = false;
             lastLineWasDialogue = false;
+        } else if (/^#{1,6}\s/.test(trimmed)) {
+            const levelMatch = trimmed.match(/^(#+)/);
+            const level = Math.min(levelMatch ? levelMatch[1].length : 1, 3);
+            type = `section-heading-${level}`;
+            lastLineWasCharacter = false;
+            lastLineWasParenthetical = false;
+            lastLineWasDialogue = false;
         } else if (regexPatterns.transition.test(trimmed)) {
             type = 'transition';
             lastLineWasCharacter = false;
@@ -74,6 +81,18 @@ function parseFountain(text: string): FountainLine[] {
         } else if (
             lastLineWasEmpty &&
             regexPatterns.character.test(rawLine) &&
+            !regexPatterns.sceneHeading.test(trimmed) &&
+            !regexPatterns.transition.test(trimmed)
+        ) {
+            type = 'character';
+            lastLineWasCharacter = true;
+            lastLineWasParenthetical = false;
+            lastLineWasDialogue = false;
+        } else if (
+            // Dual-dialogue marker: CHARACTER ^ immediately after a dialogue block (no blank line required)
+            (lastLineWasCharacter || lastLineWasParenthetical || lastLineWasDialogue) &&
+            regexPatterns.character.test(rawLine) &&
+            trimmed.endsWith('^') &&
             !regexPatterns.sceneHeading.test(trimmed) &&
             !regexPatterns.transition.test(trimmed)
         ) {
@@ -197,8 +216,11 @@ function renderLine(line: FountainLine): string {
 
     // Strip Fountain markers for display
     if (line.type === 'centered') {
-        // Remove > and < markers
         displayText = escapeHtml(line.text.replace(/^>\s*/, '').replace(/\s*<$/, ''));
+    } else if (line.type === 'transition') {
+        displayText = escapeHtml(line.text.replace(/^>\s*/, ''));
+    } else if (line.type.startsWith('section-heading')) {
+        displayText = escapeHtml(line.text.replace(/^#+\s*/, ''));
     }
 
     return `<div class="fountain-line fountain-${line.type}">${displayText}</div>`;
@@ -248,11 +270,19 @@ export class FountainPreviewView extends ItemView {
         title.style.cssText = 'font-weight:600; font-size:0.9em; color:var(--text-muted);';
         header.appendChild(title);
 
+        const btnStyle = 'cursor:pointer; font-size:0.8em; padding:2px 8px; border-radius:4px; border:1px solid var(--background-modifier-border); background:var(--background-secondary); color:var(--text-normal); margin-left:4px;';
+
         const refreshBtn = document.createElement('button');
         refreshBtn.textContent = '↻ Refresh';
-        refreshBtn.style.cssText = 'cursor:pointer; font-size:0.8em; padding:2px 8px; border-radius:4px; border:1px solid var(--background-modifier-border); background:var(--background-secondary); color:var(--text-normal);';
+        refreshBtn.style.cssText = btnStyle;
         refreshBtn.addEventListener('click', () => this.forceRefresh());
         header.appendChild(refreshBtn);
+
+        const pdfBtn = document.createElement('button');
+        pdfBtn.textContent = '📄 Export PDF';
+        pdfBtn.style.cssText = btnStyle;
+        pdfBtn.addEventListener('click', () => this.exportPdf());
+        header.appendChild(pdfBtn);
 
         container.appendChild(header);
 
@@ -351,6 +381,169 @@ export class FountainPreviewView extends ItemView {
         this.applyCustomCss();
     }
 
+    exportPdf() {
+        if (!this.trackedFile) {
+            new Notice('No file loaded in preview.');
+            return;
+        }
+
+        const bodyHtml = this.contentEl_inner.innerHTML;
+        const printCss = this.buildPrintCss();
+
+        // Inject a hidden overlay with the screenplay content
+        const overlay = document.createElement('div');
+        overlay.id = 'fountain-print-overlay';
+        overlay.className = 'fountain-preview-content';
+        overlay.innerHTML = bodyHtml;
+        document.body.appendChild(overlay);
+
+        // Inject print styles:
+        //   - On screen: hide the overlay
+        //   - On print: hide all Obsidian UI, show only the overlay
+        const printStyle = document.createElement('style');
+        printStyle.id = 'fountain-print-style';
+        printStyle.textContent = `
+@media screen {
+    #fountain-print-overlay { display: none !important; }
+}
+@media print {
+    body > *:not(#fountain-print-overlay) { display: none !important; }
+    #fountain-print-overlay { display: block !important; }
+}
+${printCss}
+`;
+        document.head.appendChild(printStyle);
+
+        setTimeout(() => {
+            window.print();
+            // Clean up overlay after the print dialog is dismissed
+            setTimeout(() => {
+                overlay.remove();
+                printStyle.remove();
+            }, 2000);
+        }, 200);
+    }
+
+    private buildPrintCss(): string {
+        const customCss = this.plugin.settings.customCss || '';
+        return `
+@page {
+    size: letter;
+    margin: 1in;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    padding: 0;
+    background: white;
+    color: black;
+}
+
+.fountain-preview-content {
+    font-family: "Courier Prime", "Courier New", Courier, monospace;
+    font-size: 12pt;
+    line-height: 1.5;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    background: white;
+    color: black;
+}
+
+.fountain-line { margin: 0; padding: 0; }
+.fountain-empty { min-height: 1em; }
+
+.fountain-scene-heading {
+    text-transform: uppercase;
+    font-weight: bold;
+    margin-top: 1.5em;
+    page-break-after: avoid;
+}
+
+.fountain-character {
+    margin-left: 22ch;
+    text-transform: uppercase;
+    margin-top: 1em;
+    page-break-after: avoid;
+}
+
+.fountain-dialogue {
+    margin-left: 10ch;
+    max-width: 35ch;
+    page-break-before: avoid;
+}
+
+.fountain-parenthetical {
+    margin-left: 16ch;
+    max-width: 25ch;
+    page-break-before: avoid;
+    page-break-after: avoid;
+}
+
+.fountain-transition {
+    text-align: right;
+    text-transform: uppercase;
+    margin-top: 1em;
+}
+
+.fountain-centered { text-align: center; }
+.fountain-action { margin-top: 0.5em; }
+
+/* Section Headings — # becomes a title page */
+.fountain-section-heading-1 {
+    page-break-before: always;
+    page-break-after: always;
+    text-align: center;
+    font-size: 1.4em;
+    font-weight: bold;
+    text-transform: uppercase;
+    padding-top: 4in;
+}
+
+.fountain-section-heading-2 {
+    font-weight: bold;
+    text-transform: uppercase;
+    margin-top: 2em;
+    page-break-after: avoid;
+}
+
+.fountain-section-heading-3 {
+    font-weight: bold;
+    margin-top: 1.5em;
+    page-break-after: avoid;
+}
+
+.fountain-dual-dialogue {
+    display: flex;
+    gap: 2ch;
+    margin-top: 1em;
+    width: 100%;
+    page-break-inside: avoid;
+}
+
+.fountain-dual-col { flex: 1; min-width: 0; }
+
+.fountain-dual-col .fountain-character {
+    margin-left: 5ch;
+    margin-top: 0;
+}
+
+.fountain-dual-col .fountain-dialogue {
+    margin-left: 0;
+    max-width: none;
+}
+
+.fountain-dual-col .fountain-parenthetical {
+    margin-left: 2ch;
+    max-width: none;
+}
+
+${customCss}
+`;
+    }
+
     applyCustomCss() {
         if (this.styleEl) {
             const previewCss = `
@@ -415,6 +608,32 @@ export class FountainPreviewView extends ItemView {
 /* Action */
 .fountain-action {
     margin-top: 0.5em;
+}
+
+/* Section Headings */
+.fountain-section-heading-1 {
+    text-align: center;
+    font-size: 1.4em;
+    font-weight: bold;
+    text-transform: uppercase;
+    margin: 3em 0 2em;
+    padding: 0.5em 0;
+    border-top: 1px solid var(--background-modifier-border);
+    border-bottom: 1px solid var(--background-modifier-border);
+    color: var(--text-accent);
+}
+
+.fountain-section-heading-2 {
+    font-weight: bold;
+    text-transform: uppercase;
+    margin: 2em 0 0.5em;
+    color: var(--text-muted);
+}
+
+.fountain-section-heading-3 {
+    font-weight: bold;
+    margin: 1.5em 0 0.5em;
+    color: var(--text-muted);
 }
 
 /* ===== Dual Dialogue ===== */
