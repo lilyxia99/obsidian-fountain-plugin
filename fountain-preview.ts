@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, TFile, MarkdownView, Notice } from 'obsidian';
+import { App, ItemView, Modal, WorkspaceLeaf, TFile, MarkdownView, Notice } from 'obsidian';
 import FountainPlugin from './main';
 
 export const FOUNTAIN_PREVIEW_VIEW = 'fountain-preview-view';
@@ -239,6 +239,7 @@ export class FountainPreviewView extends ItemView {
     private contentEl_inner: HTMLElement;
     private styleEl: HTMLStyleElement;
     private trackedFile: TFile | null = null; // Remember last file even when pane is focused
+    private scrollSyncCleanup: (() => void) | null = null;
 
     constructor(leaf: WorkspaceLeaf, plugin: FountainPlugin) {
         super(leaf);
@@ -302,11 +303,10 @@ export class FountainPreviewView extends ItemView {
             if (!leaf) return;
             const view = leaf.view;
             if (view instanceof MarkdownView && view.file) {
-                // User switched to a different file — update tracked file
                 this.trackedFile = view.file;
                 this.renderFile();
+                this.attachScrollSync(view);
             }
-            // If user clicks the preview pane itself, do nothing — keep showing the last file
         }));
 
         // Real-time sync: listen to ANY file modification
@@ -333,7 +333,10 @@ export class FountainPreviewView extends ItemView {
     }
 
     async onClose() {
-        // cleanup handled by Obsidian's registerEvent
+        if (this.scrollSyncCleanup) {
+            this.scrollSyncCleanup();
+            this.scrollSyncCleanup = null;
+        }
     }
 
     /**
@@ -345,6 +348,7 @@ export class FountainPreviewView extends ItemView {
             const view = leaf.view;
             if (view instanceof MarkdownView && view.file) {
                 this.trackedFile = view.file;
+                this.attachScrollSync(view);
                 return;
             }
         }
@@ -386,162 +390,24 @@ export class FountainPreviewView extends ItemView {
             new Notice('No file loaded in preview.');
             return;
         }
-
         const bodyHtml = this.contentEl_inner.innerHTML;
-        const printCss = this.buildPrintCss();
-
-        // Inject a hidden overlay with the screenplay content
-        const overlay = document.createElement('div');
-        overlay.id = 'fountain-print-overlay';
-        overlay.className = 'fountain-preview-content';
-        overlay.innerHTML = bodyHtml;
-        document.body.appendChild(overlay);
-
-        // Inject print styles:
-        //   - On screen: hide the overlay
-        //   - On print: hide all Obsidian UI, show only the overlay
-        const printStyle = document.createElement('style');
-        printStyle.id = 'fountain-print-style';
-        printStyle.textContent = `
-@media screen {
-    #fountain-print-overlay { display: none !important; }
-}
-@media print {
-    body > *:not(#fountain-print-overlay) { display: none !important; }
-    #fountain-print-overlay { display: block !important; }
-}
-${printCss}
-`;
-        document.head.appendChild(printStyle);
-
-        setTimeout(() => {
-            window.print();
-            // Clean up overlay after the print dialog is dismissed
-            setTimeout(() => {
-                overlay.remove();
-                printStyle.remove();
-            }, 2000);
-        }, 200);
+        new FountainPrintModal(this.app, this.plugin.settings.customCss || '', bodyHtml).open();
     }
 
-    private buildPrintCss(): string {
-        const customCss = this.plugin.settings.customCss || '';
-        return `
-@page {
-    size: letter;
-    margin: 1in;
-}
-
-* { box-sizing: border-box; }
-
-body {
-    margin: 0;
-    padding: 0;
-    background: white;
-    color: black;
-}
-
-.fountain-preview-content {
-    font-family: "Courier Prime", "Courier New", Courier, monospace;
-    font-size: 12pt;
-    line-height: 1.5;
-    max-width: 100%;
-    margin: 0;
-    padding: 0;
-    background: white;
-    color: black;
-}
-
-.fountain-line { margin: 0; padding: 0; }
-.fountain-empty { min-height: 1em; }
-
-.fountain-scene-heading {
-    text-transform: uppercase;
-    font-weight: bold;
-    margin-top: 1.5em;
-    page-break-after: avoid;
-}
-
-.fountain-character {
-    margin-left: 22ch;
-    text-transform: uppercase;
-    margin-top: 1em;
-    page-break-after: avoid;
-}
-
-.fountain-dialogue {
-    margin-left: 10ch;
-    max-width: 35ch;
-    page-break-before: avoid;
-}
-
-.fountain-parenthetical {
-    margin-left: 16ch;
-    max-width: 25ch;
-    page-break-before: avoid;
-    page-break-after: avoid;
-}
-
-.fountain-transition {
-    text-align: right;
-    text-transform: uppercase;
-    margin-top: 1em;
-}
-
-.fountain-centered { text-align: center; }
-.fountain-action { margin-top: 0.5em; }
-
-/* Section Headings — # becomes a title page */
-.fountain-section-heading-1 {
-    page-break-before: always;
-    page-break-after: always;
-    text-align: center;
-    font-size: 1.4em;
-    font-weight: bold;
-    text-transform: uppercase;
-    padding-top: 4in;
-}
-
-.fountain-section-heading-2 {
-    font-weight: bold;
-    text-transform: uppercase;
-    margin-top: 2em;
-    page-break-after: avoid;
-}
-
-.fountain-section-heading-3 {
-    font-weight: bold;
-    margin-top: 1.5em;
-    page-break-after: avoid;
-}
-
-.fountain-dual-dialogue {
-    display: flex;
-    gap: 2ch;
-    margin-top: 1em;
-    width: 100%;
-    page-break-inside: avoid;
-}
-
-.fountain-dual-col { flex: 1; min-width: 0; }
-
-.fountain-dual-col .fountain-character {
-    margin-left: 5ch;
-    margin-top: 0;
-}
-
-.fountain-dual-col .fountain-dialogue {
-    margin-left: 0;
-    max-width: none;
-}
-
-.fountain-dual-col .fountain-parenthetical {
-    margin-left: 2ch;
-    max-width: none;
-}
-
-${customCss}
-`;
+    attachScrollSync(view: MarkdownView) {
+        if (this.scrollSyncCleanup) {
+            this.scrollSyncCleanup();
+            this.scrollSyncCleanup = null;
+        }
+        const editorEl = view.containerEl.querySelector('.cm-scroller') as HTMLElement | null;
+        if (!editorEl) return;
+        const previewEl = this.contentEl_inner;
+        const handler = () => {
+            const fraction = editorEl.scrollTop / Math.max(1, editorEl.scrollHeight - editorEl.clientHeight);
+            previewEl.scrollTop = fraction * (previewEl.scrollHeight - previewEl.clientHeight);
+        };
+        editorEl.addEventListener('scroll', handler, { passive: true });
+        this.scrollSyncCleanup = () => editorEl.removeEventListener('scroll', handler);
     }
 
     applyCustomCss() {
@@ -670,5 +536,218 @@ ${customCss}
                 this.styleEl.textContent += '\n' + this.plugin.settings.customCss;
             }
         }
+    }
+}
+
+// ── Print Preview Modal ─────────────────────────────────────────────────────
+
+class FountainPrintModal extends Modal {
+    private customCss: string;
+    private bodyHtml: string;
+    private paperSize: 'letter' | 'a4' = 'letter';
+    private margins: 'normal' | 'narrow' | 'tight' = 'normal';
+    private showPageNumbers = false;
+
+    constructor(app: App, customCss: string, bodyHtml: string) {
+        super(app);
+        this.customCss = customCss;
+        this.bodyHtml = bodyHtml;
+    }
+
+    onOpen() {
+        const { contentEl, modalEl } = this;
+        contentEl.empty();
+
+        // Size the modal
+        modalEl.style.cssText = 'width:90vw; max-width:90vw; height:85vh; max-height:85vh; display:flex; flex-direction:column;';
+        contentEl.style.cssText = 'flex:1; display:flex; flex-direction:column; overflow:hidden; padding:0;';
+
+        // ── Toolbar ──────────────────────────────────────────────────────────
+        const toolbar = contentEl.createDiv();
+        toolbar.style.cssText = 'display:flex; align-items:center; gap:12px; padding:10px 16px; border-bottom:1px solid var(--background-modifier-border); flex-shrink:0; flex-wrap:wrap; background:var(--background-secondary);';
+
+        const selStyle = 'padding:3px 6px; border-radius:4px; border:1px solid var(--background-modifier-border); background:var(--background-primary); color:var(--text-normal); font-size:0.85em;';
+        const labelStyle = 'font-size:0.85em; color:var(--text-muted); white-space:nowrap;';
+
+        // Paper size
+        const paperLabel = toolbar.createSpan({ text: 'Paper:' });
+        paperLabel.style.cssText = labelStyle;
+        const paperSel = toolbar.createEl('select');
+        paperSel.style.cssText = selStyle;
+        [['letter', 'Letter (8.5"×11")'], ['a4', 'A4 (210×297mm)']].forEach(([v, t]) => {
+            paperSel.createEl('option', { value: v, text: t });
+        });
+        paperSel.value = this.paperSize;
+        paperSel.addEventListener('change', () => {
+            this.paperSize = paperSel.value as 'letter' | 'a4';
+            this.updatePreview(previewInner, previewStyle);
+        });
+
+        // Margins
+        const marginLabel = toolbar.createSpan({ text: 'Margins:' });
+        marginLabel.style.cssText = labelStyle;
+        const marginSel = toolbar.createEl('select');
+        marginSel.style.cssText = selStyle;
+        [['normal', 'Normal (1")'], ['narrow', 'Narrow (¾")'], ['tight', 'Tight (½")']].forEach(([v, t]) => {
+            marginSel.createEl('option', { value: v, text: t });
+        });
+        marginSel.value = this.margins;
+        marginSel.addEventListener('change', () => {
+            this.margins = marginSel.value as 'normal' | 'narrow' | 'tight';
+            this.updatePreview(previewInner, previewStyle);
+        });
+
+        // Page numbers
+        const pageNumWrap = toolbar.createDiv();
+        pageNumWrap.style.cssText = 'display:flex; align-items:center; gap:5px;';
+        const pageNumCb = document.createElement('input');
+        pageNumCb.type = 'checkbox';
+        pageNumCb.checked = this.showPageNumbers;
+        pageNumWrap.appendChild(pageNumCb);
+        const pageNumLabel = pageNumWrap.createSpan({ text: 'Page numbers' });
+        pageNumLabel.style.cssText = labelStyle;
+        pageNumCb.addEventListener('change', () => { this.showPageNumbers = pageNumCb.checked; });
+
+        // Print button
+        const printBtn = toolbar.createEl('button');
+        printBtn.textContent = '🖨️ Print / Save as PDF';
+        printBtn.style.cssText = 'margin-left:auto; padding:6px 16px; cursor:pointer; background:var(--interactive-accent); color:var(--text-on-accent); border:none; border-radius:4px; font-weight:600; font-size:0.9em;';
+        printBtn.addEventListener('click', () => this.doPrint());
+
+        // ── Preview area ──────────────────────────────────────────────────────
+        const previewWrapper = contentEl.createDiv();
+        previewWrapper.style.cssText = 'flex:1; overflow-y:auto; background:#666; padding:24px; display:flex; flex-direction:column; align-items:center;';
+
+        // Scoped style tag for fountain classes (inside modal, so auto-cleaned on close)
+        const previewStyle = previewWrapper.createEl('style');
+
+        // The "paper" div
+        const previewInner = previewWrapper.createDiv({ cls: 'fountain-preview-content fountain-modal-paper' });
+        previewInner.innerHTML = this.bodyHtml;
+
+        this.updatePreview(previewInner, previewStyle);
+    }
+
+    private getMarginValue(): string {
+        return this.margins === 'narrow' ? '0.75in' : this.margins === 'tight' ? '0.5in' : '1in';
+    }
+
+    private updatePreview(previewInner: HTMLElement, previewStyle: HTMLElement) {
+        const margin = this.getMarginValue();
+        const width = this.paperSize === 'a4' ? '210mm' : '8.5in';
+
+        previewInner.style.cssText = `
+            background: white !important;
+            color: black !important;
+            width: ${width};
+            max-width: 100%;
+            padding: ${margin};
+            font-family: "Courier Prime", "Courier New", Courier, monospace;
+            font-size: 12pt;
+            line-height: 1.5;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            min-height: 10in;
+        `;
+
+        previewStyle.textContent = `
+.fountain-modal-paper .fountain-line { margin: 0; padding: 0; color: black; }
+.fountain-modal-paper .fountain-empty { min-height: 1em; }
+.fountain-modal-paper .fountain-scene-heading { text-transform: uppercase; font-weight: bold; margin-top: 1.5em; color: black; }
+.fountain-modal-paper .fountain-character { margin-left: 22ch; text-transform: uppercase; margin-top: 1em; color: black; }
+.fountain-modal-paper .fountain-dialogue { margin-left: 10ch; max-width: 35ch; color: black; }
+.fountain-modal-paper .fountain-parenthetical { margin-left: 16ch; max-width: 25ch; color: black; }
+.fountain-modal-paper .fountain-transition { text-align: right; text-transform: uppercase; margin-top: 1em; color: black; }
+.fountain-modal-paper .fountain-centered { text-align: center; color: black; }
+.fountain-modal-paper .fountain-action { margin-top: 0.5em; color: black; }
+.fountain-modal-paper .fountain-section-heading-1 { text-align: center; font-size: 1.4em; font-weight: bold; text-transform: uppercase; margin: 3em 0 2em; border-top: 1px solid #ccc; border-bottom: 1px solid #ccc; padding: 0.5em 0; color: black; }
+.fountain-modal-paper .fountain-section-heading-2 { font-weight: bold; text-transform: uppercase; margin: 2em 0 0.5em; color: black; }
+.fountain-modal-paper .fountain-section-heading-3 { font-weight: bold; margin: 1.5em 0 0.5em; color: black; }
+.fountain-modal-paper .fountain-dual-dialogue { display: flex; gap: 2ch; margin-top: 1em; width: 100%; }
+.fountain-modal-paper .fountain-dual-col { flex: 1; min-width: 0; }
+.fountain-modal-paper .fountain-dual-col .fountain-character { margin-left: 5ch; margin-top: 0; }
+.fountain-modal-paper .fountain-dual-col .fountain-dialogue { margin-left: 0; max-width: none; }
+.fountain-modal-paper .fountain-dual-col .fountain-parenthetical { margin-left: 2ch; max-width: none; }
+${this.customCss}`;
+    }
+
+    private doPrint() {
+        const margin = this.getMarginValue();
+        const size = this.paperSize === 'a4' ? 'A4' : 'letter';
+        const pageNumberCss = this.showPageNumbers
+            ? `@page { @bottom-right { content: counter(page); font-family: "Courier Prime", "Courier New", Courier, monospace; font-size: 10pt; } }`
+            : '';
+
+        const printCss = `
+@page { size: ${size}; margin: ${margin}; }
+${pageNumberCss}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 0; background: white; color: black; }
+
+.fountain-preview-content {
+    font-family: "Courier Prime", "Courier New", Courier, monospace;
+    font-size: 12pt; line-height: 1.5;
+    max-width: 100%; margin: 0; padding: 0;
+    background: white; color: black;
+}
+.fountain-line { margin: 0; padding: 0; }
+.fountain-empty { min-height: 1em; }
+
+.fountain-scene-heading {
+    text-transform: uppercase; font-weight: bold;
+    margin-top: 1.5em; page-break-after: avoid;
+}
+.fountain-character {
+    margin-left: 22ch; text-transform: uppercase;
+    margin-top: 1em; page-break-after: avoid;
+}
+/* No page-break-before:avoid on dialogue — lets long blocks flow naturally across pages */
+.fountain-dialogue { margin-left: 10ch; max-width: 35ch; }
+.fountain-parenthetical { margin-left: 16ch; max-width: 25ch; page-break-after: avoid; }
+.fountain-transition { text-align: right; text-transform: uppercase; margin-top: 1em; }
+.fountain-centered { text-align: center; }
+.fountain-action { margin-top: 0.5em; }
+
+.fountain-section-heading-1 {
+    page-break-before: always; page-break-after: always;
+    text-align: center; font-size: 1.4em; font-weight: bold;
+    text-transform: uppercase; padding-top: 4in;
+}
+.fountain-section-heading-2 { font-weight: bold; text-transform: uppercase; margin-top: 2em; page-break-after: avoid; }
+.fountain-section-heading-3 { font-weight: bold; margin-top: 1.5em; page-break-after: avoid; }
+
+/* No page-break-inside:avoid on dual-dialogue — lets long dual blocks flow naturally */
+.fountain-dual-dialogue { display: flex; gap: 2ch; margin-top: 1em; width: 100%; }
+.fountain-dual-col { flex: 1; min-width: 0; }
+.fountain-dual-col .fountain-character { margin-left: 5ch; margin-top: 0; }
+.fountain-dual-col .fountain-dialogue { margin-left: 0; max-width: none; }
+.fountain-dual-col .fountain-parenthetical { margin-left: 2ch; max-width: none; }
+
+${this.customCss}`;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'fountain-print-overlay';
+        overlay.className = 'fountain-preview-content';
+        overlay.innerHTML = this.bodyHtml;
+        document.body.appendChild(overlay);
+
+        const printStyle = document.createElement('style');
+        printStyle.id = 'fountain-print-style';
+        printStyle.textContent = `
+@media screen { #fountain-print-overlay { display: none !important; } }
+@media print {
+    body > *:not(#fountain-print-overlay) { display: none !important; }
+    #fountain-print-overlay { display: block !important; }
+}
+${printCss}`;
+        document.head.appendChild(printStyle);
+
+        setTimeout(() => {
+            window.print();
+            setTimeout(() => { overlay.remove(); printStyle.remove(); }, 2000);
+        }, 200);
+    }
+
+    onClose() {
+        this.contentEl.empty();
     }
 }
